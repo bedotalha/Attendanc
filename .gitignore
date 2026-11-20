@@ -1,0 +1,28 @@
+# Student records and application state
+imports/
+backups/
+site/data/
+phone-test/
+_attend-qr-test-*/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local credentials, tunnel setup and environment files
+.env*
+!.env.example
+**/local-teacher-access.json
+**/public-origin.json
+**/location-setup.json
+
+# Runtime output and installed dependencies
+*.log
+site/node_modules/
+phone-test/node_modules/
+
+# Local tools and captured third-party sessions
+tools/
+craft-location-review/
+attendzy-investigation.cany/evidence/
+attendzy-investigation.cany/journal/
+attendzy-investigation.cany/unknowns/
