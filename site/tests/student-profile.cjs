@@ -1,0 +1,14 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+const profile=source.slice(source.indexOf("    let studentProfileId="),source.indexOf("    function studentForm("));
+const helpers=['countedSessions','getStatus','reportRate'].map(n=>source.split(/\r?\n/).find(l=>l.trimStart().startsWith('function '+n+'('))).join('\n');
+const db={students:[{id:'s',courseId:'a'},{id:'other',courseId:'b'}],sessions:[{id:'1',courseId:'a',startedAt:'2026-10-01',active:false,records:{s:{status:'present'}}},{id:'2',courseId:'a',startedAt:'2026-10-02',active:false,records:{}},{id:'3',courseId:'a',startedAt:'2026-10-03',active:false,records:{s:{status:'excused'}}},{id:'4',courseId:'b',startedAt:'2026-10-04',records:{s:{status:'present'}}}]};
+const handlers={},fields={'#studentInstructorNotes':{value:'Test private note'},'#studentNotesResult':{textContent:''}};let saves=0,audits=[];
+const ctx=vm.createContext({db,document:{addEventListener:(n,f)=>handlers[n]=f},$:key=>fields[key],saveDb:()=>saves++,renderStudents:()=>{},addAudit:(...a)=>audits.push(a)});
+vm.runInContext(helpers+'\n'+profile,ctx);
+const result=ctx.studentProfileSummary(db.students[0]);assert.equal(result.entries.length,3);assert.equal(result.present,1);assert.equal(result.absent,1);assert.equal(result.excused,1);assert.equal(result.rate,50);
+vm.runInContext("studentProfileId='s'",ctx);
+handlers.click({target:{id:'saveStudentNotes',closest:selector=>selector==='#saveStudentNotes'?{}:null}});
+assert.equal(db.students[0].instructorNotes,'Test private note');assert.equal(db.students[1].instructorNotes,undefined);assert.equal(saves,1);assert.equal(fields['#studentNotesResult'].textContent,'تم الحفظ');assert.ok(!JSON.stringify(audits).includes('Test private note'));
+const server=fs.readFileSync(path.join(__dirname,'../server.js'),'utf8');assert.ok(server.includes('.map(item => ({ id: item.id, name: item.name }))'));
+console.log('PASS student summary course isolation, absences, excuses, rate, private note save, other student unchanged, note content absent from audit, public roster exposes only id/name.');

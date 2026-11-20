@@ -1,0 +1,12 @@
+{
+  "name": "university-attendance-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local prototype for university attendance management",
+  "scripts": {
+    "start": "node --experimental-sqlite server.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}
