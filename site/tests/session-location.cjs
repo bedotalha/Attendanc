@@ -86,8 +86,11 @@ assert.ok(source.includes("const peerLocations = peerRecords.filter(([, record])
 assert.ok(source.includes('student = state.studentById.get(body.studentId);'));
 assert.ok(source.includes('if (student?.courseId !== session.courseId) student = null;'));
 assert.ok(source.includes('!locationAccepted && !locationCheck.provisional'));
+assert.ok(source.includes("if (course.locationPolicy !== 'off' && !location)"));
+assert.ok(source.includes("verification: 'location_required'"));
 assert.ok(source.includes("delete record.locationPoint"));
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+assert.ok(html.includes("locationSignal=await requestLocation();if(!locationSignal)"));
 assert.ok(!html.includes('followup=locationStatus'));
 assert.ok(!html.includes('locationVerificationPanel'));
 assert.ok(html.includes('verificationCell(record,session.id,student.id)'));

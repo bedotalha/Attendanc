@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 const net = require('node:net');
 const { DatabaseSync } = require('node:sqlite');
 const QRCode = require('qrcode');
@@ -185,7 +186,7 @@ function normalizedState(value) {
   };
   for (const session of state.sessions) {
     if (!session.records || typeof session.records !== 'object') session.records = {};
-    if (typeof session.welcomeTitle === 'string') session.welcomeTitle = session.welcomeTitle.slice(0, 10);
+    if (typeof session.welcomeTitle === 'string') session.welcomeTitle = session.welcomeTitle.slice(0, 60);
     if (typeof session.welcomeMessage === 'string') session.welcomeMessage = session.welcomeMessage.slice(0, 42);
   }
   return state;
@@ -738,8 +739,10 @@ function assessSessionLocation(settings, location, area, peers, hasDevice) {
     if (settings.locationLat != null) return assessLocation(settings, location);
     const points = peers.map(record => record.locationPoint).filter(Boolean);
     const result = assessLocation(settings, location, points);
-    if (hasDevice && !result.provisional) return result;
-    if (hasDevice && !area) return { ...result, status: 'awaiting_peers', provisional: true };
+    // Accurate GPS outranks the approximate IP area. Without independent peers,
+    // retain the GPS observation as provisional rather than replacing it with IP.
+    if (!hasDevice || result.provisional) return { ...result, status: 'awaiting_peers', provisional: true };
+    return result;
   }
   if (areaCoordinates(area)) {
     const reference = settings.teacherNetworkArea;
@@ -977,7 +980,7 @@ async function handleApi(request, response, url) {
     const autoEndAt = session.autoEndAt || null;
     return sendJson(response, 200, {
       pin: makeRotatingPin(session.code, Math.floor(now / intervalMs), intervalSeconds, Math.max(0, Number(session.pinGeneration) || 0)),
-      welcomeTitle: String(session.welcomeTitle ?? 'أهلا بكم').slice(0, 10),
+      welcomeTitle: String(session.welcomeTitle ?? 'أهلا بكم').slice(0,60),
       welcomeMessage: String(session.welcomeMessage ?? 'يرجي تسجيل الاسم الثلاثي').slice(0, 42),
       rotationSeconds: intervalSeconds,
       secondsRemaining: Math.ceil((intervalMs - (now % intervalMs)) / 1000),
@@ -1073,6 +1076,9 @@ async function handleApi(request, response, url) {
       const record = session.records[student.id];
       return sendJson(response, 201, { ok: true, alreadyRecorded: true, status: record.status, lateByMinutes: record.lateByMinutes || null, time: record.time, verification: record.verification, message: 'تم حفظ تسجيل حضورك بالفعل.' });
     }
+    if (course.locationPolicy !== 'off' && !location) {
+      return sendJson(response, 403, { error: 'تحديد موقع الهاتف مطلوب لتسجيل الحضور. فعّل إذن الموقع وGPS ثم أعد المحاولة.', verification: 'location_required' });
+    }
     const previousAttendance = new Map(Object.entries(session.records).map(([id, record]) => [id, JSON.stringify(record)]));
     const checkinEvents = [];
     let locationCheck;
@@ -1126,8 +1132,7 @@ async function handleApi(request, response, url) {
     session.records[student.id] = attendanceRecord;
     locationCheck = attendanceRecord.verification.location;
     for (const [, record] of sameDeviceRecords) markSharedDevice(record, student.name);
-    const flagged = ['verify', 'low_accuracy', 'unconfigured', 'awaiting_peers', 'insufficient_accuracy'].includes(locationCheck.status)
-      || (locationCheck.status === 'not_shared' && networkStatus === 'different_network')
+    const flagged = ['verify', 'low_accuracy', 'unconfigured', 'awaiting_peers', 'insufficient_accuracy', 'not_shared'].includes(locationCheck.status)
       || deviceStatus === 'shared';
     const auditAction = timing.status === 'tardy' ? (selfEnrolled ? 'تسجيل ذاتي متأخر' : 'تسجيل متأخر') : (selfEnrolled ? 'تسجيل ذاتي وحضور' : 'تسجيل حضور');
     const auditSummary = timing.status === 'tardy' ? (selfEnrolled ? `أضاف ${student.name} اسمه وسجل حضوره متأخرًا ${timing.lateByMinutes} دقيقة؛ الاسم بحاجة إلى مراجعة` : `سُجل حضور طالب متأخرًا ${timing.lateByMinutes} دقيقة عن موعد البداية`) : selfEnrolled ? `أضاف ${student.name} اسمه وسجل حضوره؛ الاسم بحاجة إلى مراجعة` : 'تم تسجيل حضور طالب في جلسة مفتوحة';
@@ -1279,7 +1284,11 @@ function serveStatic(request, response, url) {
   else return sendJson(response, 404, { error: 'الصفحة غير موجودة.' });
 
   securityHeaders(response);
-  response.setHeader('Content-Type', url.pathname.endsWith('.csv') ? 'text/csv; charset=utf-8' : 'text/html; charset=utf-8');
+  const isCsv = url.pathname.endsWith('.csv');
+  response.setHeader('Content-Type', isCsv ? 'text/csv; charset=utf-8' : 'text/html; charset=utf-8');
+  if (!isCsv) response.setHeader('Vary', 'Accept-Encoding');
+  const gzip = !isCsv && request.method === 'GET' && /(?:^|,)\s*gzip\s*(?:;|,|$)/i.test(request.headers['accept-encoding'] || '');
+  if (gzip) response.setHeader('Content-Encoding', 'gzip');
   if (url.pathname.endsWith('.csv')) response.setHeader('Content-Disposition', 'attachment; filename="students-demo.csv"');
   const stream = fs.createReadStream(filePath);
   stream.on('error', () => {
@@ -1287,7 +1296,11 @@ function serveStatic(request, response, url) {
     else response.destroy();
   });
   if (request.method === 'HEAD') { response.end(); stream.destroy(); }
-  else stream.pipe(response);
+  else if (gzip) {
+    const compressor = zlib.createGzip();
+    compressor.on('error', () => response.destroy());
+    stream.pipe(compressor).pipe(response);
+  } else stream.pipe(response);
 }
 
 const server = http.createServer(async (request, response) => {
