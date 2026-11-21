@@ -961,6 +961,7 @@ async function handleApi(request, response, url) {
       sessionTitle: session.title || '',
       allowSelfEnrollment: session.allowSelfEnrollment !== false,
       locationPolicy: settings.locationPolicy,
+      locationRequired: settings.locationPolicy === 'required' || ['review', 'block'].includes(settings.locationPolicy),
       locationSource: settings.locationLat == null ? 'class' : 'teacher',
       locationRadiusM: settings.locationRadiusM,
       devicePolicy: settings.devicePolicy,
@@ -1076,8 +1077,14 @@ async function handleApi(request, response, url) {
       const record = session.records[student.id];
       return sendJson(response, 201, { ok: true, alreadyRecorded: true, status: record.status, lateByMinutes: record.lateByMinutes || null, time: record.time, verification: record.verification, message: 'تم حفظ تسجيل حضورك بالفعل.' });
     }
-    if (course.locationPolicy !== 'off' && !location) {
-      return sendJson(response, 403, { error: 'تحديد موقع الهاتف مطلوب لتسجيل الحضور. فعّل إذن الموقع وGPS ثم أعد المحاولة.', verification: 'location_required' });
+    const gpsRequired = course.locationPolicy === 'required' || ['review', 'block'].includes(course.locationPolicy);
+    const gpsInaccurate = course.locationPolicy === 'required' && location
+      && location.accuracy > Math.min(250, course.locationRadiusM);
+    if (gpsRequired && (!location || gpsInaccurate)) {
+      const error = !location
+        ? 'تحديد موقع GPS مطلوب لتسجيل الحضور. فعّل إذن الموقع وأعد المحاولة.'
+        : 'دقة GPS غير كافية للتسجيل. انتقل إلى مكان مفتوح وأعد طلب الموقع.';
+      return sendJson(response, 403, { error, verification: !location ? 'location_required' : 'location_inaccurate' });
     }
     const previousAttendance = new Map(Object.entries(session.records).map(([id, record]) => [id, JSON.stringify(record)]));
     const checkinEvents = [];
